@@ -180,7 +180,6 @@ public class ImgBoardServiceImpl implements ImgBoardService {
                 attachmentMapper.insertAttachment(avo);
             }
         }
-        
         return findByImgBoardNo(imgBoardNo);
     }
 
