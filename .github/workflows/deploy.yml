@@ -1,0 +1,91 @@
+name: Build and Deploy Spring Boot App
+
+on: # 트리거
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Java # 자바 설치
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+          cache: "gradle"
+
+      - name: Grant execute permission for gradle # 실핼 권한
+        run: chmod +x ./gradlew
+
+      - name: Build to Boot project # 빌드하기
+        run: ./gradlew bootJar -x test
+
+      - name: Verify Build jar # 빌드 확인하기
+        run: |
+          if [ ! -f build/libs/*.jar ]; then
+            echo "빌드 실패"
+            exit
+          fi
+          echo "빌드파일 만들기 성공"
+
+      - name: Change Maintenance Mode # 로딩 시 대기보드 보여주기
+        if: github.event_name == 'push'
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            cd /home/ubuntu/deploy/
+            sudo cp /home/ubuntu/deploy/front/dist/index.html /home/ubuntu/deploy/Maintenence/index_tmp.html
+            sudo cp /home/ubuntu/deploy/Maintenence/index.thml /home/ubuntu/deploy/front/dist/index.html
+            docker compose restart web
+            echo "유지보수 모드 활성화~"
+            sleep 5
+
+      - name: Prepare Target Directory # 기존 빌드파일 backup로 옮기기(날리면 잘못 올렸을때 망가지기 때문에)
+        if: github.event_name == 'push'
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            mkdir -p /home/ubuntu/deploy/back/backup
+            find /home/ubuntu/deploy/back/backup -name "backup-*.jar" -mtime +3 -delete
+            if [ -f /home/ubuntu/deploy/back/*.jar ]; then
+              mv /home/ubuntu/deploy/back/*.jar /home/ubuntu/deploy/back/backup-$(date + %Y&m%d%H%M%S).jar
+            fi
+
+      - name: Deploy Boot App To EC2 # 빌드파일 옮기기
+        if: github.event_name == 'push'
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          source: "build/libs/*.jar"
+          target: "/home/ubuntu/deploy/back/"
+          strip_components: 2
+
+      - name: Restart Container # 컨테이너 재시작
+        if: github.event_name == 'push'
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          source: |
+            cd /hone/ubuntu/deploy
+            docker compose restart api
+            sleep 50
+            sudo cp /home/ubuntu/deploy/Maintenence/index_tmp.html /home/ubuntu/deploy/front/dist/index.html
+            rm /home/ubuntu/deploy/Maintenence/index_tmp.html
+            docker compose restart web
+            echo "정상 모드 복원 완료"
